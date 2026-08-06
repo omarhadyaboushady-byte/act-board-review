@@ -1,9 +1,22 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ACT F&B — H1 FY2026 Board Review</title>
 
-<style>html,body{margin:0;padding:0;height:100%;background:#0C0F16;overflow:hidden;font-family:Arial,Helvetica,sans-serif;font-variant-numeric:tabular-nums}#root{width:100vw;height:100vh}*{-webkit-tap-highlight-color:transparent}</style>
+<!-- PWA / installable mobile app -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0C0F16">
+<meta name="color-scheme" content="dark light">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ACT Board">
+<meta name="application-name" content="ACT Board">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+
+<style>html,body{margin:0;padding:0;height:100%;background:#0C0F16;overflow:hidden;overscroll-behavior:none;font-family:Arial,Helvetica,sans-serif;font-variant-numeric:tabular-nums}#root{width:100vw;height:100vh;height:100dvh}*{-webkit-tap-highlight-color:transparent}@keyframes actFade{from{opacity:0}to{opacity:1}}@keyframes actSlideUp{from{transform:translateY(14px);opacity:0}to{transform:translateY(0);opacity:1}}</style>
 </head><body><div id="root"></div>
 <script>/**
  * @license React
@@ -8702,6 +8715,17 @@ function ACTReview() {
     w: 1280,
     h: 720
   });
+  // Mobile chrome state: layout mode + navigator drawer + one-time hint.
+  const [ui, setUi] = useState({
+    mobile: false,
+    portrait: false,
+    vw: 1280,
+    vh: 720,
+    topBar: 0,
+    bottomBar: 0
+  });
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showHint, setShowHint] = useState(false);
   const goTo = useCallback(id => {
     const idx = SLIDES.findIndex(s => s.id === id);
     if (idx >= 0) setI(idx);
@@ -8792,18 +8816,33 @@ function ACTReview() {
     return () => window.removeEventListener("keydown", h);
   }, [next, prev]);
 
-  // Fit a fixed 16:9 stage (1280×720) into the viewport, letterboxed.
+  // Fit the fixed 16:9 stage (1280×720) into the viewport.
+  // On phones we frame it with an app bar + bottom nav instead of dead letterbox space.
   useEffect(() => {
     const BASE_W = 1280,
       BASE_H = 720;
     const fit = () => {
       const vw = window.innerWidth,
         vh = window.innerHeight;
-      const scale = Math.min(vw / BASE_W, vh / BASE_H);
+      const mobile = Math.min(vw, vh) <= 560 || (vw <= 820 && "ontouchstart" in window);
+      const portrait = vh >= vw;
+      // Reserve room for the chrome only when it's actually shown (mobile portrait).
+      const topBar = mobile && portrait ? 52 : 0;
+      const bottomBar = mobile && portrait ? 66 : 0;
+      const availH = vh - topBar - bottomBar;
+      const scale = Math.min(vw / BASE_W, availH / BASE_H);
       setStage({
         scale,
         w: BASE_W,
         h: BASE_H
+      });
+      setUi({
+        mobile,
+        portrait,
+        vw,
+        vh,
+        topBar,
+        bottomBar
       });
     };
     fit();
@@ -8815,18 +8854,56 @@ function ACTReview() {
     };
   }, []);
 
-  // Touch swipe navigation for phones
+  // Show a one-time "rotate / pinch to zoom" hint on phones.
   useEffect(() => {
-    let x0 = null;
+    if (!ui.mobile) return;
+    let seen = false;
+    try {
+      seen = localStorage.getItem("act-mobile-hint") === "1";
+    } catch (e) {}
+    if (!seen) {
+      setShowHint(true);
+      const t = setTimeout(() => {
+        setShowHint(false);
+        try {
+          localStorage.setItem("act-mobile-hint", "1");
+        } catch (e) {}
+      }, 5200);
+      return () => clearTimeout(t);
+    }
+  }, [ui.mobile]);
+
+  // Close the navigator drawer whenever the slide changes.
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [i]);
+
+  // Touch swipe navigation for phones. Requires a mostly-horizontal, single-finger
+  // gesture so pinch-zoom and vertical panning of a zoomed slide don't flip slides.
+  useEffect(() => {
+    let x0 = null,
+      y0 = null,
+      multi = false;
     const start = e => {
+      if (e.touches && e.touches.length > 1) {
+        multi = true;
+        x0 = null;
+        return;
+      }
+      multi = false;
       x0 = e.touches ? e.touches[0].clientX : null;
+      y0 = e.touches ? e.touches[0].clientY : null;
     };
     const end = e => {
-      if (x0 == null) return;
-      const x1 = e.changedTouches ? e.changedTouches[0].clientX : null;
-      if (x1 == null) return;
-      const dx = x1 - x0;
-      if (Math.abs(dx) > 50) {
+      if (menuOpen || multi || x0 == null) {
+        x0 = null;
+        return;
+      }
+      const t = e.changedTouches ? e.changedTouches[0] : null;
+      if (!t) return;
+      const dx = t.clientX - x0,
+        dy = t.clientY - y0;
+      if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.4) {
         if (dx < 0) next();else prev();
       }
       x0 = null;
@@ -8841,10 +8918,48 @@ function ACTReview() {
       window.removeEventListener("touchstart", start);
       window.removeEventListener("touchend", end);
     };
-  }, [next, prev]);
+  }, [next, prev, menuOpen]);
   const s = SLIDES[i];
   const stageW = stage.w * stage.scale;
   const stageH = stage.h * stage.scale;
+  // ---- Mobile chrome helpers ----
+  const pageLabel = String(i + 1).padStart(2, "0") + " / " + String(SLIDES.length).padStart(2, "0");
+  const barBg = "rgba(12,15,22,0.92)";
+  const navBtn = (fn, disabled, glyph, label) => /*#__PURE__*/React.createElement("button", {
+    onClick: fn,
+    disabled: disabled,
+    "aria-label": label,
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      width: 54,
+      height: 46,
+      borderRadius: 12,
+      border: "none",
+      flexShrink: 0,
+      background: disabled ? "rgba(255,255,255,0.06)" : "rgba(252,106,40,0.18)",
+      color: disabled ? "rgba(255,255,255,0.25)" : "#fff",
+      cursor: disabled ? "default" : "pointer"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: { fontSize: 20, lineHeight: 1 }
+  }, glyph), /*#__PURE__*/React.createElement("span", {
+    style: { fontSize: 9, letterSpacing: 0.5, marginTop: 1, color: disabled ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.6)" }
+  }, label));
+  // Group slides by section for the navigator drawer.
+  const navGroups = [];
+  SLIDES.forEach((sl, idx) => {
+    const g = sl.eyebrow || (sl.kind === "cover" ? "Cover" : "Overview");
+    let bucket = navGroups.find(x => x.g === g);
+    if (!bucket) {
+      bucket = { g: g, items: [] };
+      navGroups.push(bucket);
+    }
+    bucket.items.push({ sl: sl, idx: idx });
+  });
+  const mobilePad = ui.mobile && ui.portrait;
   return /*#__PURE__*/React.createElement("div", {
     style: {
       position: "fixed",
@@ -8854,7 +8969,10 @@ function ACTReview() {
       overflow: "hidden",
       display: "flex",
       alignItems: "center",
-      justifyContent: "center"
+      justifyContent: "center",
+      paddingTop: mobilePad ? ui.topBar : 0,
+      paddingBottom: mobilePad ? ui.bottomBar : 0,
+      boxSizing: "border-box"
     }
   }, /*#__PURE__*/React.createElement("div", {
     "data-export-stage": true,
@@ -8919,7 +9037,7 @@ function ACTReview() {
     meta: s
   }), s.kind === "pending" && /*#__PURE__*/React.createElement(Pending, {
     meta: s
-  }))), /*#__PURE__*/React.createElement("button", {
+  }))), !ui.mobile && /*#__PURE__*/React.createElement("button", {
     onClick: prev,
     disabled: i === 0,
     style: {
@@ -8937,7 +9055,7 @@ function ACTReview() {
       fontSize: 20,
       cursor: i === 0 ? "default" : "pointer"
     }
-  }, "‹"), /*#__PURE__*/React.createElement("button", {
+  }, "‹"), !ui.mobile && /*#__PURE__*/React.createElement("button", {
     onClick: next,
     disabled: i === SLIDES.length - 1,
     style: {
@@ -8955,7 +9073,7 @@ function ACTReview() {
       fontSize: 20,
       cursor: "pointer"
     }
-  }, "›"), /*#__PURE__*/React.createElement("div", {
+  }, "›"), !ui.mobile && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "fixed",
       bottom: 14,
@@ -8986,7 +9104,7 @@ function ACTReview() {
       background: idx === i ? C.orange : "rgba(255,255,255,0.4)",
       transition: "all .25s"
     }
-  }))), /*#__PURE__*/React.createElement("div", {
+  }))), !ui.mobile && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "fixed",
       top: 12,
@@ -8999,7 +9117,7 @@ function ACTReview() {
       padding: "3px 8px",
       borderRadius: 10
     }
-  }, String(i + 1).padStart(2, "0"), " / ", String(SLIDES.length).padStart(2, "0")), /*#__PURE__*/React.createElement("button", {
+  }, String(i + 1).padStart(2, "0"), " / ", String(SLIDES.length).padStart(2, "0")), !ui.mobile && /*#__PURE__*/React.createElement("button", {
     onClick: exportPDF,
     disabled: exporting,
     title: "Export the whole deck (every tab) to a PDF",
@@ -9050,8 +9168,140 @@ function ACTReview() {
       maxWidth: 360,
       textAlign: "center"
     }
-  }, "Please keep this tab open and in the foreground until the file downloads.")));
+  }, "Please keep this tab open and in the foreground until the file downloads.")),
+
+  /* ============================ MOBILE APP CHROME ============================ */
+  ui.mobile && /*#__PURE__*/React.createElement(React.Fragment, null,
+
+    /* --- Top app bar (portrait) --- */
+    ui.portrait && /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "fixed", top: 0, left: 0, right: 0, height: ui.topBar, zIndex: 70,
+        display: "flex", alignItems: "center", gap: 10, padding: "0 12px",
+        boxSizing: "border-box", background: barBg, color: "#fff",
+        WebkitBackdropFilter: "blur(8px)", backdropFilter: "blur(8px)",
+        borderBottom: "1px solid rgba(255,255,255,0.08)"
+      }
+    },
+      /*#__PURE__*/React.createElement("button", {
+        onClick: () => setMenuOpen(true), "aria-label": "Open slide menu",
+        style: { width: 34, height: 34, borderRadius: 9, border: "none", background: "rgba(255,255,255,0.10)", color: "#fff", fontSize: 16, cursor: "pointer", flexShrink: 0 }
+      }, "☰"),
+      /*#__PURE__*/React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+        /*#__PURE__*/React.createElement("div", { style: { fontSize: 9.5, letterSpacing: 1.5, color: C.orange, fontWeight: 700 } }, (s.eyebrow || "ACT F&B").toUpperCase()),
+        /*#__PURE__*/React.createElement("div", { style: { fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, s.title || "H1 FY2026 Board Review")
+      ),
+      /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, color: "rgba(255,255,255,0.55)", fontWeight: 600, flexShrink: 0 } }, pageLabel)
+    ),
+
+    /* --- Landscape mini controls (full-bleed slide) --- */
+    !ui.portrait && /*#__PURE__*/React.createElement("button", {
+      onClick: () => setMenuOpen(true), "aria-label": "Open slide menu",
+      style: { position: "fixed", top: 10, left: 10, zIndex: 70, width: 38, height: 38, borderRadius: 10, border: "none", background: "rgba(12,15,22,0.55)", color: "#fff", fontSize: 17, cursor: "pointer", WebkitBackdropFilter: "blur(6px)", backdropFilter: "blur(6px)" }
+    }, "☰"),
+    !ui.portrait && /*#__PURE__*/React.createElement("div", {
+      style: { position: "fixed", top: 12, right: 12, zIndex: 70, fontSize: 11.5, color: "rgba(255,255,255,0.7)", background: "rgba(12,15,22,0.55)", padding: "4px 9px", borderRadius: 10, letterSpacing: 1 }
+    }, pageLabel),
+
+    /* --- Bottom nav (portrait) --- */
+    ui.portrait && /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "fixed", bottom: 0, left: 0, right: 0, minHeight: ui.bottomBar, zIndex: 70,
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+        padding: "8px 14px", paddingBottom: "calc(8px + env(safe-area-inset-bottom))",
+        boxSizing: "border-box", background: barBg,
+        WebkitBackdropFilter: "blur(8px)", backdropFilter: "blur(8px)",
+        borderTop: "1px solid rgba(255,255,255,0.08)"
+      }
+    },
+      navBtn(prev, i === 0, "‹", "Prev"),
+      /*#__PURE__*/React.createElement("div", {
+        onClick: () => setMenuOpen(true),
+        style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer" }
+      },
+        /*#__PURE__*/React.createElement("div", { style: { width: "100%", maxWidth: 200, height: 4, borderRadius: 4, background: "rgba(255,255,255,0.18)", overflow: "hidden" } },
+          /*#__PURE__*/React.createElement("div", { style: { width: ((i + 1) / SLIDES.length * 100) + "%", height: "100%", background: C.orange, transition: "width .3s" } })
+        ),
+        /*#__PURE__*/React.createElement("div", { style: { fontSize: 10.5, color: "rgba(255,255,255,0.55)", letterSpacing: 0.5 } }, "Tap for all slides")
+      ),
+      navBtn(next, i === SLIDES.length - 1, "›", "Next")
+    ),
+
+    /* --- One-time hint toast --- */
+    showHint && /*#__PURE__*/React.createElement("div", {
+      onClick: () => setShowHint(false),
+      style: {
+        position: "fixed", left: "50%", bottom: ui.portrait ? ui.bottomBar + 16 : 16,
+        transform: "translateX(-50%)", zIndex: 85, background: "rgba(12,15,22,0.96)", color: "#fff",
+        padding: "10px 16px", borderRadius: 12, fontSize: 12.5, maxWidth: "84vw", textAlign: "center",
+        boxShadow: "0 8px 30px rgba(0,0,0,0.5)", border: "1px solid rgba(252,106,40,0.5)", animation: "actSlideUp .35s ease"
+      }
+    }, "↻ Rotate to landscape for a full-screen slide · pinch to zoom · swipe to move"),
+
+    /* --- Navigator drawer --- */
+    menuOpen && /*#__PURE__*/React.createElement("div", {
+      onClick: () => setMenuOpen(false),
+      style: { position: "fixed", inset: 0, zIndex: 90, background: "rgba(6,8,12,0.55)", WebkitBackdropFilter: "blur(2px)", backdropFilter: "blur(2px)", animation: "actFade .2s ease" }
+    },
+      /*#__PURE__*/React.createElement("div", {
+        onClick: (e) => e.stopPropagation(),
+        style: {
+          position: "absolute", top: 0, bottom: 0, left: 0, width: "min(86vw,360px)",
+          background: "#0C0F16", borderRight: "1px solid rgba(255,255,255,0.08)",
+          boxShadow: "0 0 40px rgba(0,0,0,0.6)", display: "flex", flexDirection: "column", animation: "actSlideUp .25s ease"
+        }
+      },
+        /*#__PURE__*/React.createElement("div", {
+          style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 16px 12px", paddingTop: "calc(16px + env(safe-area-inset-top))", borderBottom: "1px solid rgba(255,255,255,0.08)" }
+        },
+          /*#__PURE__*/React.createElement("div", null,
+            /*#__PURE__*/React.createElement("div", { style: { fontSize: 9.5, letterSpacing: 2, color: C.orange, fontWeight: 700 } }, "ACT F&B · H1 FY2026"),
+            /*#__PURE__*/React.createElement("div", { style: { fontSize: 16, fontWeight: 700, color: "#fff" } }, "Board Review")
+          ),
+          /*#__PURE__*/React.createElement("button", {
+            onClick: () => setMenuOpen(false), "aria-label": "Close menu",
+            style: { width: 32, height: 32, borderRadius: 8, border: "none", background: "rgba(255,255,255,0.10)", color: "#fff", fontSize: 16, cursor: "pointer" }
+          }, "✕")
+        ),
+        /*#__PURE__*/React.createElement("div", {
+          style: { flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 0 20px" }
+        },
+          navGroups.map((grp) => /*#__PURE__*/React.createElement("div", { key: grp.g },
+            /*#__PURE__*/React.createElement("div", { style: { fontSize: 9.5, letterSpacing: 1.5, color: "rgba(255,255,255,0.4)", fontWeight: 700, padding: "14px 18px 4px" } }, grp.g.toUpperCase()),
+            grp.items.map((it) => /*#__PURE__*/React.createElement("button", {
+              key: it.sl.id,
+              onClick: () => { setI(it.idx); setMenuOpen(false); },
+              style: {
+                display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left",
+                border: "none", cursor: "pointer", padding: "11px 18px",
+                background: it.idx === i ? "rgba(252,106,40,0.14)" : "transparent",
+                color: it.idx === i ? "#fff" : "rgba(255,255,255,0.78)",
+                borderLeft: it.idx === i ? "3px solid " + C.orange : "3px solid transparent"
+              }
+            },
+              /*#__PURE__*/React.createElement("span", { style: { fontSize: 11, fontVariantNumeric: "tabular-nums", color: it.idx === i ? C.orange : "rgba(255,255,255,0.35)", fontWeight: 700, width: 22, flexShrink: 0 } }, String(it.idx + 1).padStart(2, "0")),
+              /*#__PURE__*/React.createElement("span", { style: { fontSize: 13.5, fontWeight: it.idx === i ? 700 : 500 } }, it.sl.title || "Cover")
+            ))
+          ))
+        ),
+        /*#__PURE__*/React.createElement("button", {
+          onClick: () => { setMenuOpen(false); exportPDF(); }, disabled: exporting,
+          style: { margin: "10px 16px calc(16px + env(safe-area-inset-bottom))", padding: "12px", borderRadius: 10, border: "none", background: C.orange, color: "#fff", fontWeight: 700, fontSize: 13.5, cursor: exporting ? "default" : "pointer" }
+        }, exporting ? "Exporting…" : "⭳  Export deck as PDF")
+      )
+    )
+  ));
 }
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(React.createElement(ACTReview));</script>
+<script>
+/* Register the service worker so the deck installs to the home screen and works offline. */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function (e) {
+      console.warn('SW registration failed:', e);
+    });
+  });
+}
+</script>
 </body></html>
